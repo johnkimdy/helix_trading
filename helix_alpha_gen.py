@@ -117,7 +117,7 @@ class HelixInspiredTradingSystem:
                 # Generate latent representation
                 # In a full implementation, this would be a more sophisticated model
                 # (like Helix's 7B parameter VLM)
-                latent_vector = np.random.normal(0, 1, len(self.tickers))
+                latent_vector = np.random.normal(0, 1, len(self.tickers)) # why is this necessary?
                 
                 # Alpha scores (expected returns above benchmark)
                 alpha_scores = np.array([np.random.normal(0.001, 0.005) for _ in self.tickers])

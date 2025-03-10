@@ -10,11 +10,13 @@ This system implements a dual-system architecture similar to Helix:
   - Analogous to Helix's "think slow" VLM backbone
   - Generates latent vectors containing alpha predictions and risk factors
   - Focuses on strategic market analysis
+  - Based on an open-sourced 7B VLM
 
 - **System 1 (Tactical Model)**: Runs at ~100Hz, handles real-time execution
   - Analogous to Helix's "think fast" visuomotor policy
   - Reacts to microstructure signals and executes trades
   - Optimizes execution based on latent vectors from System 2
+  - Based on "Imitating Task and Motion Planning with Visuomotor Transformers" (Dalal et al., 2023)
 
 ## Key Features
 
