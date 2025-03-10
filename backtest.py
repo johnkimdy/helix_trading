@@ -17,7 +17,8 @@ class BacktestEngine:
         end_date: str, 
         initial_capital: float = 1000000.0,
         tickers: Optional[List[str]] = None,
-        data_source: str = 'mock'
+        data_source: str = 'mock',
+        result_pth: str = 'backtest_results.pkl'
     ):
         """
         Initialize the backtesting engine.
@@ -34,6 +35,8 @@ class BacktestEngine:
         self.initial_capital = initial_capital
         self.current_capital = initial_capital
         self.data_source = data_source
+        self.result_pth = result_pth
+
         
         # Trading system
         self.trading_system = HelixInspiredTradingSystem(tickers=tickers)
@@ -329,7 +332,7 @@ class BacktestEngine:
                 self.benchmark_returns.append(benchmark_return)
             
             # Print progress update
-            if day_count % progress_interval == 0:
+            if progress_interval > 0 and day_count % progress_interval == 0:
                 print(f"Day {day_count}: {current_date.date()} - Portfolio: ${portfolio_value:.2f}, Benchmark: ${benchmark_value:.2f}")
             
             # Move to next day
@@ -478,10 +481,28 @@ class BacktestEngine:
         plt.tight_layout()
         plt.show()
         
-    def save_results(self, filename: str = 'backtest_results.pkl') -> None:
+    def save_results(self, filename: str = None) -> None:
         """
-        Save backtest results to a file.
+        Save backtest results to a file in the specified directory.
+        
+        Args:
+            filename: Optional specific filename (without path).
+                    If None, a default name will be generated.
         """
+        import os
+        
+        # Create the directory if it doesn't exist
+        os.makedirs(self.result_pth, exist_ok=True)
+        
+        # Generate a default filename if none provided
+        if filename is None:
+            # Format: backtest_YYYYMMDD_HHMMSS.pkl
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"backtest_{timestamp}.pkl"
+        
+        # Full path to the file
+        filepath = os.path.join(self.result_pth, filename)
+        
         results = {
             'dates': self.dates,
             'portfolio_values': self.portfolio_values,
@@ -493,16 +514,29 @@ class BacktestEngine:
             'metrics': self.metrics if hasattr(self, 'metrics') else None
         }
         
-        with open(filename, 'wb') as f:
+        with open(filepath, 'wb') as f:
             pickle.dump(results, f)
         
-        print(f"Results saved to {filename}")
+        print(f"Results saved to {filepath}")
 
 
 if __name__ == "__main__":
-    # Run a backtest for the last 1 year
-    end_date = datetime.now().strftime('%Y-%m-%d')
-    start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+    import argparse
+    
+    # Set up command line argument parsing
+    parser = argparse.ArgumentParser(description='Run a backtest for the trading system')
+    parser.add_argument('--start', type=str, help='Start date in YYYY-MM-DD format')
+    parser.add_argument('--end', type=str, help='End date in YYYY-MM-DD format')
+    parser.add_argument('--capital', type=float, default=1000000.0, help='Initial capital')
+    parser.add_argument('--filename', type=str, help='Output filename for results (without path)')
+    parser.add_argument('--result_dir', type=str, default='test_results', help='Directory to save results')
+    parser.add_argument('--save_results', action='store_true', help='Whether to save results')
+    
+    args = parser.parse_args()
+    
+    # Set dates
+    end_date = args.end if args.end else datetime.now().strftime('%Y-%m-%d')
+    start_date = args.start if args.start else (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
     
     # Expanded ticker list
     tickers = [
@@ -516,8 +550,9 @@ if __name__ == "__main__":
     backtest = BacktestEngine(
         start_date=start_date,
         end_date=end_date,
-        initial_capital=1000000.0,
-        tickers=tickers
+        initial_capital=args.capital,
+        tickers=tickers,
+        result_pth=args.result_dir
     )
     
     # Run the backtest
@@ -544,4 +579,5 @@ if __name__ == "__main__":
     backtest.plot_performance()
     
     # Save results
-    backtest.save_results()
+    if args.save_results:
+        backtest.save_results(filename=args.filename)
