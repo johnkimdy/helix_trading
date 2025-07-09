@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import pickle
 from typing import Dict, List, Tuple, Optional, Any
 from helix_alpha_gen import HelixInspiredTradingSystem
+from market_data import MarketDataFetcher
 
 class BacktestEngine:
     """
@@ -52,6 +53,9 @@ class BacktestEngine:
         # Market regime detection
         self.market_regimes = []
         
+        # Initialize market data fetcher
+        self.market_data_fetcher = MarketDataFetcher()
+        
         # Load or generate data
         self.data = self._load_data()
         
@@ -62,7 +66,38 @@ class BacktestEngine:
         """
         data = {}
         
-        if self.data_source == 'mock':
+        if self.data_source == 'real':
+            # Use real market data from yfinance
+            print("Fetching real market data...")
+            start_str = self.start_date.strftime('%Y-%m-%d')
+            end_str = self.end_date.strftime('%Y-%m-%d')
+            
+            # If no tickers specified, use a sample of S&P 500
+            if not self.trading_system.tickers:
+                self.trading_system.tickers = self.market_data_fetcher.get_sample_tickers(50)
+            
+            data = self.market_data_fetcher.fetch_data(
+                self.trading_system.tickers, 
+                start_str, 
+                end_str
+            )
+            
+            # Filter out tickers with insufficient data
+            min_days = 30
+            filtered_data = {}
+            for ticker, df in data.items():
+                if len(df) >= min_days:
+                    filtered_data[ticker] = df
+                else:
+                    print(f"Removing {ticker}: insufficient data ({len(df)} days)")
+            
+            # Update tickers list to only include those with sufficient data
+            self.trading_system.tickers = list(filtered_data.keys())
+            print(f"Using {len(filtered_data)} tickers with sufficient data")
+            
+            return filtered_data
+            
+        elif self.data_source == 'mock':
             # Generate synthetic data for backtesting
             date_range = pd.date_range(start=self.start_date, end=self.end_date, freq='D')
             num_days = len(date_range)
@@ -134,8 +169,16 @@ class BacktestEngine:
         lookback_start = current_date - timedelta(days=lookback_days)
         
         for ticker, df in self.data.items():
+            # Handle timezone compatibility
+            compare_date = current_date
+            if df.index.tz is not None and current_date.tzinfo is None:
+                import pytz
+                compare_date = pytz.timezone(str(df.index.tz)).localize(current_date)
+            elif df.index.tz is None and current_date.tzinfo is not None:
+                compare_date = current_date.replace(tzinfo=None)
+            
             # Get data up to current date
-            hist_data = df[df.index <= current_date]
+            hist_data = df[df.index <= compare_date]
             if len(hist_data) < 5:  # Need some minimum history
                 continue
                 
@@ -185,6 +228,16 @@ class BacktestEngine:
         
         # Get recent price history
         hist_data = self.data[benchmark_ticker]
+        
+        # Convert current_date to timezone-aware if the data index is timezone-aware
+        if hist_data.index.tz is not None and current_date.tzinfo is None:
+            # Make current_date timezone-aware using the same timezone as the data
+            import pytz
+            current_date = pytz.timezone(str(hist_data.index.tz)).localize(current_date)
+        elif hist_data.index.tz is None and current_date.tzinfo is not None:
+            # Make current_date timezone-naive
+            current_date = current_date.replace(tzinfo=None)
+        
         recent_data = hist_data[hist_data.index <= current_date].iloc[-20:]
         
         if len(recent_data) < 10:
@@ -270,16 +323,32 @@ class BacktestEngine:
             # Calculate portfolio value before trades
             portfolio_value_before = cash
             for ticker, quantity in portfolio.items():
-                price = self.data[ticker].loc[current_date, 'close'] if current_date in self.data[ticker].index else 0
+                # Handle timezone compatibility for index lookup
+                lookup_date = current_date
+                if self.data[ticker].index.tz is not None and current_date.tzinfo is None:
+                    import pytz
+                    lookup_date = pytz.timezone(str(self.data[ticker].index.tz)).localize(current_date)
+                elif self.data[ticker].index.tz is None and current_date.tzinfo is not None:
+                    lookup_date = current_date.replace(tzinfo=None)
+                
+                price = self.data[ticker].loc[lookup_date, 'close'] if lookup_date in self.data[ticker].index else 0
                 portfolio_value_before += quantity * price
             
             # Execute trades
             trades_today = []
             for ticker, target_pct in target_positions.items():
-                if current_date not in self.data[ticker].index:
+                # Handle timezone compatibility for index lookup
+                lookup_date = current_date
+                if self.data[ticker].index.tz is not None and current_date.tzinfo is None:
+                    import pytz
+                    lookup_date = pytz.timezone(str(self.data[ticker].index.tz)).localize(current_date)
+                elif self.data[ticker].index.tz is None and current_date.tzinfo is not None:
+                    lookup_date = current_date.replace(tzinfo=None)
+                
+                if lookup_date not in self.data[ticker].index:
                     continue
                     
-                price = self.data[ticker].loc[current_date, 'close']
+                price = self.data[ticker].loc[lookup_date, 'close']
                 current_value = portfolio[ticker] * price
                 target_value = target_pct * portfolio_value_before
                 value_difference = target_value - current_value
@@ -310,13 +379,21 @@ class BacktestEngine:
             
             # Calculate current portfolio value and benchmark
             for ticker in self.trading_system.tickers:
-                if current_date in self.data[ticker].index:
-                    price = self.data[ticker].loc[current_date, 'close']
+                # Handle timezone compatibility for index lookup
+                lookup_date = current_date
+                if self.data[ticker].index.tz is not None and current_date.tzinfo is None:
+                    import pytz
+                    lookup_date = pytz.timezone(str(self.data[ticker].index.tz)).localize(current_date)
+                elif self.data[ticker].index.tz is None and current_date.tzinfo is not None:
+                    lookup_date = current_date.replace(tzinfo=None)
+                
+                if lookup_date in self.data[ticker].index:
+                    price = self.data[ticker].loc[lookup_date, 'close']
                     portfolio_value += portfolio[ticker] * price
                     
                     # Equal weight benchmark
                     benchmark_weight = 1.0 / len(self.trading_system.tickers)
-                    benchmark_price_ratio = self.data[ticker].loc[current_date, 'close'] / self.data[ticker].iloc[0]['close']
+                    benchmark_price_ratio = self.data[ticker].loc[lookup_date, 'close'] / self.data[ticker].iloc[0]['close']
                     benchmark_value += self.initial_capital * benchmark_weight * benchmark_price_ratio
             
             # Store values
@@ -531,6 +608,10 @@ if __name__ == "__main__":
     parser.add_argument('--filename', type=str, help='Output filename for results (without path)')
     parser.add_argument('--result_dir', type=str, default='test_results', help='Directory to save results')
     parser.add_argument('--save_results', action='store_true', help='Whether to save results')
+    parser.add_argument('--data_source', type=str, default='real', choices=['real', 'mock'], 
+                       help='Data source: real (yfinance) or mock (synthetic)')
+    parser.add_argument('--num_tickers', type=int, default=20, 
+                       help='Number of S&P 500 tickers to use (if no specific tickers provided)')
     
     args = parser.parse_args()
     
@@ -538,13 +619,18 @@ if __name__ == "__main__":
     end_date = args.end if args.end else datetime.now().strftime('%Y-%m-%d')
     start_date = args.start if args.start else (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
     
-    # Expanded ticker list
-    tickers = [
-        "AAPL", "MSFT", "AMZN", "GOOGL", "META", 
-        "TSLA", "NVDA", "AMD", "INTC", "IBM",
-        "JPM", "BAC", "GS", "MS", "C",
-        "JNJ", "PFE", "MRK", "ABBV", "UNH"
-    ]
+    # Set tickers based on data source
+    if args.data_source == 'real':
+        # Use None to let the system fetch S&P 500 tickers automatically
+        tickers = None
+    else:
+        # Expanded ticker list for mock data
+        tickers = [
+            "AAPL", "MSFT", "AMZN", "GOOGL", "META", 
+            "TSLA", "NVDA", "AMD", "INTC", "IBM",
+            "JPM", "BAC", "GS", "MS", "C",
+            "JNJ", "PFE", "MRK", "ABBV", "UNH"
+        ]
     
     # Initialize and run backtest
     backtest = BacktestEngine(
@@ -552,8 +638,14 @@ if __name__ == "__main__":
         end_date=end_date,
         initial_capital=args.capital,
         tickers=tickers,
+        data_source=args.data_source,
         result_pth=args.result_dir
     )
+    
+    # If using real data and no tickers specified, limit to specified number
+    if args.data_source == 'real' and tickers is None:
+        if hasattr(backtest.market_data_fetcher, 'sp500_tickers') and backtest.market_data_fetcher.sp500_tickers:
+            backtest.trading_system.tickers = backtest.market_data_fetcher.sp500_tickers[:args.num_tickers]
     
     # Run the backtest
     backtest.run_backtest()
